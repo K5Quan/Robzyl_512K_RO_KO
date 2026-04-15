@@ -870,26 +870,6 @@ static uint16_t CountValidHistoryItems() {
     return (indexFs > HISTORY_SIZE) ? HISTORY_SIZE : indexFs;
 }
 
-/*static void FillfreqHistory(void)
-{
-    uint32_t f = peak.f;
-    if (f == 0 || f < 1400000 || f > 130000000) return;
-
-    for (uint16_t i = 0; i < indexFs; i++) {
-        if (HFreqs[i] == f) {
-            if (gCounthistory) {
-                if (lastReceivingFreq != f)
-                    HCount[i]++;
-            } else {
-                HCount[i]++;
-            }
-            lastReceivingFreq = f;
-            historyListIndex = i;
-            return;
-        }
-    }
-*/
-
 static void FillfreqHistory(bool countHit)
 
 {
@@ -992,12 +972,7 @@ static bool GetScanListLabel(uint8_t scanListIndex, char* bufferOut) {
     return true;
 }
 
-
-
-
-
 ////////////////////////
-
 
 static void ToggleRX(bool on) {
    // if (SPECTRUM_PAUSED || settings.rssiTriggerLevelUp == 50) return;
@@ -1027,12 +1002,9 @@ static void ToggleRX(bool on) {
     } else { 
         Fmax = benchRatePerSec; // NEED TO ACTIVATE
         rx = false;
-      //BK4819_WriteRegister(BK4819_REG_13, eepromData.R13); 
       BK4819_WriteRegister(BK4819_REG_13, DATA_R13); 
-       // BK4819_WriteRegister(BK4819_REG_13, 0x3DF);
         RADIO_SetModulation(MODULATION_FM); //Test for Kolyan OK
         BK4819_SetFilterBandwidth(BK4819_FILTER_BW_WIDE,false); //Scan in 25K bandwidth
-    //  if(appMode!=CHANNEL_MODE) BK4819_WriteRegister(0x43, GetBWRegValueForScan());
         BK4819_WriteRegister(BK4819_REG_37, 0x0A0F);  //Test for Kolyan
         BK4819_ToggleGpioOut(BK4819_GPIO6_PIN2_GREEN, 0);
         SPI0_Init(2);
@@ -1701,23 +1673,14 @@ static void DrawF(uint32_t f) {
             }
     if (Fmax) 
       {
-         // FormatFrequency(Fmax, freqStr, sizeof(freqStr));
-        //  GUI_DisplaySmallest(freqStr,  50, Bottom_print, false,true);
-    //  GetRssi();
-//sprintf(String, "R:%u", scanInfo.rssi); 
-  
-  // Выводим строку на экран (String у вас объявлен глобально)
- // GUI_DisplaySmallest(String, 50, Bottom_print, false, true);
-     // Преобразуем текущий RSSI в dBm и выводим
-
      if(isListening) {
-snprintf(String, sizeof(String), "%d dBm", Rssi2DBm(scanInfo.rssi));
-GUI_DisplaySmallest(String, 50, Bottom_print, false, true);
+        snprintf(String, sizeof(String), "%d dBm", Rssi2DBm(scanInfo.rssi));
+        GUI_DisplaySmallest(String, 50, Bottom_print, false, true);
      }else{
          // Skanow/s
-    snprintf(String, sizeof(String), "Rate: %u/s", benchRatePerSec);
-   // UI_PrintStringSmall(line, 1, LCD_WIDTH - 1, 2, 0);
-GUI_DisplaySmallest(String, 42, Bottom_print, false, true);
+        snprintf(String, sizeof(String), "Rate: %u/s", benchRatePerSec);
+     // UI_PrintStringSmall(line, 1, LCD_WIDTH - 1, 2, 0);
+        GUI_DisplaySmallest(String, 42, Bottom_print, false, true);
       }}
 
     } else { //Not Classic
@@ -1818,71 +1781,6 @@ if (appMode==CHANNEL_MODE)
   }
   
 }
-
-/*
-// back step
-static void nextFrequency833() {
-    if (scanInfo.i % 3 != 1) {
-        scanInfo.f += 833;
-    } else {
-        scanInfo.f += 834;
-    }}
-
-    static void NextScanStep() {
-    spectrumElapsedCount = 0;
-    
-
-    if (appMode==CHANNEL_MODE)
-    { 
-      if (scanChannelsCount == 0) return;
-
-      if (scanInfo.i + 1 >= scanChannelsCount)
-          scanInfo.i = 0;
-      else
-          scanInfo.i++;
-           int currentChannel = scanChannel[scanInfo.i];
-      scanInfo.f =  gMR_ChannelFrequencyAttributes[currentChannel].Frequency;
-        } 
-    else {
-          ++scanInfo.i;
-          if(scanInfo.scanStep==833) nextFrequency833();
-          else scanInfo.f += scanInfo.scanStep;
-          }
-}
-// end back step
-
-*/
-// 
-/*
-static void nextFrequencyinterlaced() {
-    static uint16_t lastStep = 0;
-    static uint16_t jumpSize = 2500;
-    static uint16_t loops = 1;
-    static uint32_t columns = 0;
-
-    // Recalcul des constantes si le pas change
-    if (scanInfo.scanStep != lastStep) {
-        lastStep = scanInfo.scanStep;
-        
-        uint8_t idx = 0;
-        for (uint8_t i = 0; i < sizeof(scanStepValues)/sizeof(scanStepValues[0]); i++) {
-            if (scanStepValues[i] == lastStep) {
-                idx = i;
-                break;
-            }
-        }
-        jumpSize = jumpSizes[idx];
-        loops    = interlacedLoops[idx];
-        columns = (GetStepsCount() + (loops - 1)) / loops;
-        if (columns == 0) columns = 1;
-    }
-    uint32_t currentColumn = scanInfo.i % columns;
-    uint32_t currentPass   = scanInfo.i / columns;
-    scanInfo.f = gScanRangeStart + (currentColumn * jumpSize) + (currentPass * lastStep);
-}
-uint32_t f_linear;
-*/
-
 
 static void NextScanStep() {
     static uint32_t StartF; 
@@ -2771,7 +2669,7 @@ case KEY_DOWN:
      // case KEY_7:
       break;
 
-//ADD KOLYAN
+//ADD KOLYAN FOR AGC SAVE
       case KEY_7:
        if (SpectrumMonitor == 2) {
             SaveSettings();    
@@ -2779,7 +2677,7 @@ case KEY_DOWN:
             SettingsLoaded = false;
             LoadSettings();}
             break;
- //ADD KOLYAN
+ //ADD
         
 case KEY_SIDE1:
     SpectrumMonitor++;
