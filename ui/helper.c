@@ -1,0 +1,640 @@
+/* Original work Copyright 2023 Dual Tachyon
+ * https://github.com/DualTachyon
+ *
+ * Modified work Copyright 2024 kamilsss655
+ * https://github.com/kamilsss655
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *     Unless required by applicable law or agreed to in writing, software
+ *     distributed under the License is distributed on an "AS IS" BASIS,
+ *     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *     See the License for the specific language governing permissions and
+ *     limitations under the License.
+ */
+
+#include <string.h>
+
+#include "driver/st7565.h"
+#include "external/printf/printf.h"
+#include "font.h"
+#include "ui/helper.h"
+#include "ui/inputbox.h"
+#include "misc.h"
+
+#ifndef ARRAY_SIZE
+	#define ARRAY_SIZE(arr) (sizeof(arr)/sizeof((arr)[0]))
+#endif
+
+void UI_GenerateChannelString(char *pString, const uint16_t Channel)
+{
+	unsigned int i;
+
+	if (gInputBoxIndex == 0)
+	{
+		sprintf(pString, "CH-%02u", Channel + 1);
+		return;
+	}
+
+	pString[0] = 'C';
+	pString[1] = 'H';
+	pString[2] = '-';
+	for (i = 0; i < 2; i++)
+		pString[i + 3] = (gInputBox[i] == 10) ? '-' : gInputBox[i] + '0';
+}
+
+void UI_GenerateChannelStringEx(char *pString, const bool bShowPrefix, const uint16_t ChannelNumber)
+{
+	if (gInputBoxIndex > 0)
+	{
+		unsigned int i;
+		for (i = 0; i < 3; i++)
+			pString[i] = (gInputBox[i] == 10) ? '-' : gInputBox[i] + '0';
+		return;
+	}
+
+	if (bShowPrefix)
+		sprintf(pString, "CH-%03u", ChannelNumber + 1);
+	else
+	if (ChannelNumber == 0xFFFF)
+		strcpy(pString, "NULL");
+	else
+		sprintf(pString, "%03u", ChannelNumber + 1);
+}
+
+void UI_PrintString(const char *pString, uint8_t Start, uint8_t End, uint8_t Line, uint8_t Width)
+{
+	size_t i;
+	size_t Length = strlen(pString);
+
+	if (End > Start)
+		Start += (((End - Start) - (Length * Width)) + 1) / 2;
+
+	for (i = 0; i < Length; i++)
+	{
+		const unsigned int ofs   = (unsigned int)Start + (i * Width);
+		if (pString[i] > ' ' && pString[i] < 127)
+		{
+			const unsigned int index = pString[i] - ' ' - 1;
+			memmove(gFrameBuffer[Line + 0] + ofs, &gFontBig[index][0], 7);
+			memmove(gFrameBuffer[Line + 1] + ofs, &gFontBig[index][7], 7);
+		}
+	}
+}
+
+void UI_PrintStringSmall(const char *pString, uint8_t Start, uint8_t End, uint8_t Line, uint8_t background)
+{
+    if (pString == NULL)
+        return;
+
+    const size_t Length = strlen(pString);
+    const unsigned int char_width  = ARRAY_SIZE(gFontSmall[0]);
+    const unsigned int spacing     = 1;
+    const unsigned int space_width = 4;
+
+    if (Line >= ARRAY_SIZE(gFrameBuffer))
+        return;
+
+    size_t start_pos = (size_t)Start;
+    size_t end_pos   = (size_t)End;
+
+    // Legacy compatibility:
+    // old UI code (main/VFO) uses Start = LCD_WIDTH + x, End = 0
+    // meaning "draw starting at x without centering"
+    const bool legacy_absolute_mode = (End == 0 && Start >= LCD_WIDTH);
+    if (legacy_absolute_mode)
+        start_pos -= LCD_WIDTH;
+
+    // Calculate actual visible text width
+    size_t text_width = 0;
+    for (size_t i = 0; i < Length; i++) {
+        const char c = pString[i];
+
+        if (c > ' ') {
+            const unsigned int index = (unsigned int)c - ' ' - 1;
+            if (index < ARRAY_SIZE(gFontSmall)) {
+                unsigned int char_width_used = char_width;
+                while (char_width_used > 0 && gFontSmall[index][char_width_used - 1] == 0)
+                    char_width_used--;
+
+                text_width += char_width_used;
+                if (i + 1 < Length)
+                    text_width += spacing;
+            }
+        } else {
+            text_width += space_width;
+        }
+    }
+
+    // Center only when a real [Start..End] range is provided,
+    // not in legacy absolute mode
+    if (!legacy_absolute_mode && end_pos > start_pos) {
+        const size_t available = end_pos - start_pos;
+        if (available > text_width)
+            start_pos += (available - text_width + 1) / 2;
+    }
+
+    if (start_pos >= LCD_WIDTH)
+        return;
+
+    size_t draw_limit = LCD_WIDTH;
+    if (!legacy_absolute_mode && end_pos > start_pos && end_pos < draw_limit)
+        draw_limit = end_pos;
+
+    uint8_t *line_buf = gFrameBuffer[Line];
+
+    // Fill background only under the text area
+    if (background) {
+        size_t fill_width = text_width;
+        if (start_pos + fill_width > draw_limit)
+            fill_width = draw_limit - start_pos;
+
+        memset(line_buf + start_pos, 0xFF, fill_width);
+    }
+
+    size_t cursor_pos = start_pos;
+
+    for (size_t i = 0; i < Length; i++)
+    {
+        const char c = pString[i];
+
+        if (c > ' ')
+        {
+            const unsigned int index = (unsigned int)c - ' ' - 1;
+            if (index < ARRAY_SIZE(gFontSmall))
+            {
+                unsigned int char_width_used = char_width;
+                while (char_width_used > 0 && gFontSmall[index][char_width_used - 1] == 0)
+                    char_width_used--;
+
+                if (cursor_pos < draw_limit) {
+                    size_t writable = char_width_used;
+                    if (cursor_pos + writable > draw_limit)
+                        writable = draw_limit - cursor_pos;
+
+                    switch (background) {
+                        case 0:
+                            memmove(line_buf + cursor_pos, gFontSmall[index], writable);
+                            break;
+
+                        case 1:
+                            for (size_t j = 0; j < writable; j++)
+                                line_buf[cursor_pos + j] = (uint8_t)~gFontSmall[index][j];
+                            break;
+
+                        default:
+                            memmove(line_buf + cursor_pos, gFontSmall[index], writable);
+                            break;
+                    }
+                }
+
+                cursor_pos += char_width_used;
+
+                if (i + 1 < Length)
+                    cursor_pos += spacing;
+            }
+        }
+        else
+        {
+            cursor_pos += space_width;
+        }
+
+        if (cursor_pos >= draw_limit)
+            break;
+    }
+}
+
+/* void UI_PrintStringSmall(const char *pString, uint8_t Start, uint8_t End, uint8_t Line, uint8_t background)
+{
+    const size_t Length = strlen(pString);
+
+    const unsigned int char_width  = ARRAY_SIZE(gFontSmall[0]);
+    const unsigned int spacing     = 1;   // espacement minimal entre caractères
+    const unsigned int space_width = 4;   // largeur spéciale pour ' '
+
+    // cast pour éviter le warning
+    size_t start_pos = (size_t)Start;
+    size_t end_pos   = (size_t)End;
+
+    if (end_pos > start_pos)
+        start_pos += (((end_pos - start_pos) - (Length * (char_width + spacing))) + 1) / 2;
+
+    uint8_t *pFb = gFrameBuffer[Line] + start_pos;
+    
+    // remplir le fond
+    if (background) memset(pFb, 0xFF, 127);
+    
+    // position courante
+    uint8_t *cursor = pFb;
+
+    for (size_t i = 0; i < Length; i++)
+    {
+        if (pString[i] > ' ')
+        {
+            const unsigned int index = (unsigned int)pString[i] - ' ' - 1;
+            if (index < ARRAY_SIZE(gFontBSmall))
+            {
+                unsigned int char_width_used = char_width;
+                while (char_width_used > 0 && gFontBSmall[index][char_width_used - 1] == 0)
+                    char_width_used--;
+
+                uint8_t *dst = cursor;
+                switch (background) {
+                    case 0:
+                        memmove(dst, gFontBSmall[index], char_width_used);
+                        break;
+                    case 1:
+                        for (unsigned int c = 0; c < char_width_used; c++)
+                            dst[c] = ~gFontBSmall[index][c];
+                        break;
+                }
+
+                cursor += char_width_used + spacing;
+            }
+        }
+        else // espace
+        {
+            cursor += space_width;
+        }
+    }
+} */
+
+
+void UI_PrintStringSmallBuffer(const char *pString, uint8_t *buffer)
+{
+	size_t i;
+	const unsigned int char_width   = ARRAY_SIZE(gFontSmall[0]);
+	const unsigned int char_spacing = char_width + 1;
+	for (i = 0; i < strlen(pString); i++)
+	{
+		if (pString[i] > ' ')
+		{
+			const unsigned int index = (unsigned int)pString[i] - ' ' - 1;
+			if (index < ARRAY_SIZE(gFontSmall))
+				memmove(buffer + (i * char_spacing) + 1, &gFontSmall[index], char_width);
+		}
+	}
+}
+
+/* void UI_PrintStringSmallBuffer(const char *pString, uint8_t *buffer)
+{
+	size_t i;
+	const unsigned int char_width   = ARRAY_SIZE(gFontBSmall[0]);
+	const unsigned int char_spacing = char_width + 1;
+	for (i = 0; i < strlen(pString); i++)
+	{
+		if (pString[i] > ' ')
+		{
+			const unsigned int index = (unsigned int)pString[i] - ' ' - 1;
+			if (index < ARRAY_SIZE(gFontBSmall))
+				memmove(buffer + (i * char_spacing) + 1, &gFontBSmall[index], char_width);
+		}
+	}
+} */
+
+void UI_DisplayFrequency(const char *string, uint8_t X, uint8_t Y, bool center)
+{
+	const unsigned int char_width  = 13;
+	uint8_t           *pFb0        = gFrameBuffer[Y] + X;
+	uint8_t           *pFb1        = pFb0 + 128;
+	bool               bCanDisplay = false;
+
+	uint8_t len = strlen(string);
+	for(int i = 0; i < len; i++) {
+		char c = string[i];
+		if(c=='-') c = '9' + 1;
+		if (bCanDisplay || c != ' ')
+		{
+			bCanDisplay = true;
+			if(c>='0' && c<='9' + 1) {
+				memcpy(pFb0 + 2, gFontBigDigits[c-'0'],                  char_width - 3);
+				memcpy(pFb1 + 2, gFontBigDigits[c-'0'] + char_width - 3, char_width - 3);
+			}
+			else if(c=='.') {
+				*pFb1 = 0x60; pFb0++; pFb1++;
+				*pFb1 = 0x60; pFb0++; pFb1++;
+				*pFb1 = 0x60; pFb0++; pFb1++;
+				continue;
+			}
+			
+		}
+		else if (center) {
+			pFb0 -= 6;
+			pFb1 -= 6;
+		}
+		pFb0 += char_width;
+		pFb1 += char_width;
+	}
+}
+
+void UI_DrawPixelBuffer(uint8_t (*buffer)[128], uint8_t x, uint8_t y, bool black) 
+{
+	if(black)
+		buffer[y/8][x] |= 1 << (y%8);
+	else
+		buffer[y/8][x] &= ~(1 << (y%8));
+}
+
+static void sort(int16_t *a, int16_t *b)
+{
+	if(*a > *b) {
+		int16_t t = *a;
+		*a = *b;
+		*b = t;
+	}
+}
+
+void UI_DrawLineBuffer(uint8_t (*buffer)[128], int16_t x1, int16_t y1, int16_t x2, int16_t y2, bool black)
+{
+	if(x2==x1) {
+		sort(&y1, &y2);
+		for(int16_t i = y1; i <= y2; i++) {
+			UI_DrawPixelBuffer(buffer, x1, i, black);
+		}
+	} else {
+		const int multipl = 1000;
+		int a = (y2-y1)*multipl / (x2-x1);
+		int b = y1 - a * x1 / multipl;
+
+		sort(&x1, &x2);
+		for(int i = x1; i<= x2; i++)
+		{
+			UI_DrawPixelBuffer(buffer, i, i*a/multipl +b, black);
+		}
+	}
+}
+
+void UI_DrawRectangleBuffer(uint8_t (*buffer)[128], int16_t x1, int16_t y1, int16_t x2, int16_t y2, bool black)
+{
+	UI_DrawLineBuffer(buffer, x1,y1, x1,y2, black);
+	UI_DrawLineBuffer(buffer, x1,y1, x2,y1, black);
+	UI_DrawLineBuffer(buffer, x2,y1, x2,y2, black);
+	UI_DrawLineBuffer(buffer, x1,y2, x2,y2, black);
+}
+
+/* void UI_DisplayPopup(const char *string) 
+{
+	for(uint8_t i = 2; i < 4; i++) {
+		memset(gFrameBuffer[i], 0x00, 111);
+	}
+
+	// for(uint8_t i = 1; i < 5; i++) {
+	// 	memset(gFrameBuffer[i]+8, 0x00, 111);
+	// }
+
+	// for(uint8_t x = 10; x < 118; x++) {
+	// 	UI_DrawPixelBuffer(x, 10, true);
+	// 	UI_DrawPixelBuffer(x, 46-9, true);
+	// }
+
+	// for(uint8_t y = 11; y < 37; y++) {
+	// 	UI_DrawPixelBuffer(10, y, true);
+	// 	UI_DrawPixelBuffer(117, y, true);
+	// }
+	// DrawRectangle(9,9, 118,38, true);
+	UI_PrintString(string, 9, 118, 2, 8);
+	//UI_PrintStringSmall("Press EXIT", 9, 118, 6);
+} */
+
+void UI_DisplayPopup(const char *string)
+{
+    // Wyczyść obszar dla popupu (linie 2-3)
+    for(uint8_t i = 2; i < 4; i++) {
+        memset(gFrameBuffer[i], 0x00, 128);  // Zwiększ do 128 dla pełnej szerokości
+    }
+    UI_PrintString(string, 12, 116, 2, 8);
+}
+
+
+void UI_DrawDottedLineBuffer(uint8_t (*buffer)[128], int16_t x1, int16_t y1, int16_t x2, int16_t y2, bool black, int dotSpacing)
+{
+    if (x2 == x1) {
+        sort(&y1, &y2);
+        for (int16_t i = y1; i <= y2; i += dotSpacing) {
+            UI_DrawPixelBuffer(buffer, x1, i, black);
+        }
+    } else {
+        const int multipl = 1000;
+        int a = (y2 - y1) * multipl / (x2 - x1);
+        int b = y1 - a * x1 / multipl;
+
+        sort(&x1, &x2);
+        for (int i = x1; i <= x2; i += dotSpacing) {
+            UI_DrawPixelBuffer(buffer, i, i * a / multipl + b, black);
+        }
+    }
+}
+
+// GUI functions
+
+void PutPixel(uint8_t x, uint8_t y, bool fill) {
+  UI_DrawPixelBuffer(gFrameBuffer, x, y, fill);
+}
+void PutPixelStatus(uint8_t x, uint8_t y, bool fill) {
+  UI_DrawPixelBuffer(&gStatusLine, x, y, fill);
+}
+
+void DrawVLine(int sy, int ey, int nx, bool fill) {
+  for (int i = sy; i <= ey; i++) { //Test
+    if (i>7 && i < 56 && nx < 128) {
+      PutPixel(nx, i, fill);
+    }
+  }
+}
+
+void GUI_DisplaySmallest(const char *pString, uint8_t x, uint8_t y,
+                                bool statusbar, bool fill) {
+  uint8_t c;
+  uint8_t pixels;
+  const uint8_t *p = (const uint8_t *)pString;
+
+  while ((c = *p++) && c != '\0') {
+    c -= 0x20;
+    for (int i = 0; i < 3; i++) {
+      pixels = gFont3x5[c][i];
+      for (int j = 0; j < 6; ++j) {
+        if (pixels & 1) {
+          if (statusbar)
+            PutPixelStatus(x + i, y + j, fill);
+          else
+            PutPixel(x + i, y + j, fill);
+        }
+        pixels >>= 1;
+      }
+    }
+    x += 4;
+  }
+}
+
+#ifdef ENABLE_PL_BAND
+void UI_PrintStringSmallScrolling(const char *pString, uint8_t Start, uint8_t End, uint8_t Line, uint8_t scrollOffset)
+{
+    const size_t Length = strlen(pString);
+    const unsigned int char_width = ARRAY_SIZE(gFontSmall[0]);
+    const unsigned int char_spacing = char_width + 1;
+    
+    if (Length == 0) return;
+    
+    // Calculate available width and maximum characters that can fit
+    uint8_t availableWidth = End - Start;
+    uint8_t maxChars = availableWidth / char_spacing;
+    
+    if (maxChars == 0) return;
+    
+    // Calculate starting character position based on scroll offset
+    uint8_t startChar = scrollOffset % (Length + 5); // Add pause at end
+    
+    // Calculate how many characters to display
+    uint8_t displayLength = (Length - startChar > maxChars) ? maxChars : Length - startChar;
+    
+    // If we reach the end and there's still space, wrap around to show beginning
+    uint8_t wrapChars = 0;
+    if (displayLength < maxChars && scrollOffset > 0) {
+        wrapChars = maxChars - displayLength;
+        if (wrapChars > Length) wrapChars = Length;
+    }
+    
+    // Center the text horizontally
+    uint8_t totalDisplayChars = displayLength + wrapChars;
+    uint8_t actualStart = Start;
+    if (End > Start && totalDisplayChars > 0) {
+        actualStart = Start + (((End - Start) - (totalDisplayChars * char_spacing)) + 1) / 2;
+    }
+    
+    uint8_t *pFb = gFrameBuffer[Line] + actualStart;
+    
+    // Draw main part from startChar
+    for (uint8_t i = 0; i < displayLength; i++)
+    {
+        char c = pString[startChar + i];
+        if (c > ' ')
+        {
+            const unsigned int index = (unsigned int)c - ' ' - 1;
+            if (index < ARRAY_SIZE(gFontSmall))
+                memmove(pFb + (i * char_spacing) + 1, &gFontSmall[index], char_width);
+        }
+    }
+    
+    // Draw wrapped part from beginning if needed
+    for (uint8_t i = 0; i < wrapChars; i++)
+    {
+        char c = pString[i];
+        if (c > ' ')
+        {
+            const unsigned int index = (unsigned int)c - ' ' - 1;
+            if (index < ARRAY_SIZE(gFontSmall))
+                memmove(pFb + ((displayLength + i) * char_spacing) + 1, &gFontSmall[index], char_width);
+        }
+    }
+}
+#endif
+
+
+/***********ИНВЕРСИЯ МЕЛКОГО ТЕКСТА**********INVERSION FONT SMALL**********************************/
+// wide_spacing = true: 6 px
+// wide_spacing = false: 4 px
+void GUI_DisplaySmallestDark(const char *pString, uint8_t x, uint8_t y, bool statusbar, bool wide_spacing)
+{
+    if (!pString || !*pString) return;
+
+    const uint8_t char_height = 6;
+    const uint8_t char_width = wide_spacing ? 6 : 4;
+
+    uint8_t base_x = x;
+    uint8_t end_x = x;
+
+    uint8_t c;
+    const uint8_t *p = (const uint8_t *)pString;
+
+    while ((c = *p++) != '\0')
+    {
+        if (c < 0x20) {
+            end_x += char_width;
+            continue;
+        }
+
+        c -= 0x20;
+
+        // Линия сверху 
+        if (y > 0)
+        {
+            for (uint8_t dx = 0; dx < char_width; dx++)
+            {
+                if (statusbar)
+                    PutPixelStatus(end_x + dx, y - 1, true);
+                else
+                    PutPixel(end_x + dx, y - 1, true);
+            }
+        }
+
+        // Чёрный фон
+        for (uint8_t dy = 0; dy < char_height; dy++)
+        {
+            for (uint8_t dx = 0; dx < char_width; dx++)
+            {
+                if (statusbar)
+                    PutPixelStatus(end_x + dx, y + dy, true);
+                else
+                    PutPixel(end_x + dx, y + dy, true);
+            }
+        }
+
+        // Белые буквы
+        const uint8_t *glyph = gFont3x5[c];
+        for (uint8_t col = 0; col < 3; col++)
+        {
+            uint8_t pixels = glyph[col];
+            for (uint8_t row = 0; row < 6; row++)
+            {
+                if (pixels & 1)
+                {
+                    uint8_t offset = wide_spacing ? 1 : 0;
+                    if (statusbar)
+                        PutPixelStatus(end_x + col + offset, y + row, false);
+                    else
+                        PutPixel(end_x + col + offset, y + row, false);
+                }
+                pixels >>= 1;
+            }
+        }
+
+        end_x += char_width;
+    }
+
+    // Вертикальные линии — в обоих режимах две слева, одна справа
+    for (uint8_t dy = 0; dy <= char_height; dy++)
+    {
+        uint8_t line_y = y + dy - 1;
+        if (line_y < 64)
+        {
+            // Две линии слева
+            if (base_x >= 2)
+            {
+                if (statusbar)
+                    PutPixelStatus(base_x - 2, line_y, true);
+                else
+                    PutPixel(base_x - 2, line_y, true);
+            }
+            if (base_x >= 1)
+            {
+                if (statusbar)
+                    PutPixelStatus(base_x - 1, line_y, true);
+                else
+                    PutPixel(base_x - 1, line_y, true);
+            }
+
+            // Линия справа
+            if (end_x < 128)
+            {
+                if (statusbar)
+                    PutPixelStatus(end_x, line_y, true);
+                else
+                    PutPixel(end_x, line_y, true);
+            }
+        }
+    }
+}
